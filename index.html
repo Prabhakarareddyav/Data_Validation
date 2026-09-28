@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mRNA Data Validator</title>
+<style>
+:root{--bg:#f7f5fa;--ink:#1d1530;--mute:#6b6480;--line:#ddd7e8;--pur:#4b1f6f;--ok:#1f7a4d;--bad:#b3261e;--card:#fff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{background:var(--pur);color:#fff;padding:22px 32px}header h1{margin:0;font-size:22px}header p{margin:4px 0 0;opacity:.8}
+main{max-width:1000px;margin:24px auto;padding:0 20px;display:grid;gap:20px}
+section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:20px}
+h2{margin:0 0 14px;font-size:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+label{display:block;font-weight:600;font-size:13px}label small{font-weight:400;color:var(--mute)}
+input[type=text],input[type=number],input[type=file]{width:100%;margin-top:4px;padding:8px;border:1px solid var(--line);border-radius:6px;font:inherit;background:#fff}
+input:focus,button:focus-visible{outline:2px solid var(--pur);outline-offset:1px}
+.chk{display:flex;gap:8px;align-items:center;margin-top:22px}
+button{font:inherit;font-weight:600;border:0;border-radius:6px;padding:10px 18px;cursor:pointer;background:var(--pur);color:#fff}
+button.alt{background:#fff;color:var(--pur);border:1px solid var(--pur)}button:disabled{opacity:.5;cursor:wait}
+.row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.stat{border:1px solid var(--line);border-radius:6px;padding:10px 12px}.stat b{display:block;font-size:22px}.stat span{color:var(--mute);font-size:13px}
+.stat.bad b{color:var(--bad)}.stat.ok b{color:var(--ok)}
+.verdict{padding:10px 14px;border-radius:6px;font-weight:600;margin-bottom:14px}
+.verdict.ok{background:#e4f4ec;color:var(--ok)}.verdict.bad{background:#fbe3e0;color:var(--bad)}
+.tw{overflow:auto;max-height:340px;margin-top:14px;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
+th{background:#efeaf5;position:sticky;top:0}
+pre{background:#1d1530;color:#d9d2ea;padding:12px;border-radius:6px;max-height:200px;overflow:auto;font-size:12px;margin:14px 0 0}
+.hide{display:none}
+</style></head><body>
+<header><h1>mRNA Data Validator</h1><p>Compare an Excel source against a CSV target, key by key and column by column.</p></header>
+<main>
+<section><h2>1. Files</h2><div class="grid">
+<label>Source file (Excel or CSV)<input type="file" id="src" accept=".xlsx,.xlsm,.xls,.csv"></label>
+<label>Target file (CSV export)<input type="file" id="tgt" accept=".csv,.xlsx"></label></div></section>
+<section><h2>2. Settings</h2><div class="grid">
+<label>Source sheet name <small>(blank = first sheet)</small><input type="text" id="sheet"></label>
+<label>Header row <small>(0 = first row)</small><input type="number" id="hdr" value="3" min="0"></label>
+<label>Key column<input type="text" id="key" value="Antigen_ID"></label>
+<label>Columns to ignore <small>(comma separated)</small><input type="text" id="ign" placeholder="COL_A, COL_B"></label>
+<label class="chk"><input type="checkbox" id="skip" checked> Skip first column of source</label></div>
+<div class="row"><button id="run">Run validation</button><button class="alt hide" id="exp">Download Excel report</button></div></section>
+<section id="res" class="hide"><h2>Results</h2><div id="verdict" class="verdict"></div><div class="stats" id="stats"></div>
+<div class="tw hide" id="tw"><table><thead><tr><th>Key</th><th>Column</th><th>Source value</th><th>Target value</th></tr></thead><tbody id="tb"></tbody></table></div>
+<pre id="log"></pre></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);let last=null;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+$('run').onclick=async()=>{
+  if(!$('src').files[0]||!$('tgt').files[0]){alert('Choose both a source and a target file.');return}
+  const fd=new FormData();
+  fd.append('source_file',$('src').files[0]);fd.append('target_file',$('tgt').files[0]);
+  fd.append('source_sheet',$('sheet').value);fd.append('header_row',$('hdr').value);
+  fd.append('key_column',$('key').value);fd.append('ignore_columns',$('ign').value);
+  fd.append('skip_first_column',$('skip').checked);
+  $('run').disabled=true;$('run').textContent='Validating...';
+  try{
+    const r=await fetch('/api/validate',{method:'POST',body:fd});const d=await r.json();
+    $('res').classList.remove('hide');$('log').textContent=(d.log||[]).join('\n');
+    if(d.status!=='ok'){$('verdict').className='verdict bad';$('verdict').textContent=d.message;$('stats').innerHTML='';$('tw').classList.add('hide');$('exp').classList.add('hide');return}
+    last=d;const s=d.summary;
+    const clean=!s.total_mismatches&&!s.missing_in_target&&!s.extra_in_target;
+    $('verdict').className='verdict '+(clean?'ok':'bad');
+    $('verdict').textContent=clean?'Pass: source and target match.':'Differences found. Review the details below.';
+    const st=(n,v,c)=>`<div class="stat ${c||''}"><b>${v}</b><span>${n}</span></div>`;
+    $('stats').innerHTML=st('Source rows',s.source_rows)+st('Target rows',s.target_rows)+st('Matching keys',s.matching_keys)+
+      st('Missing in target',s.missing_in_target,s.missing_in_target?'bad':'ok')+st('Extra in target',s.extra_in_target,s.extra_in_target?'bad':'ok')+
+      st('Value mismatches',s.total_mismatches,s.total_mismatches?'bad':'ok');
+    $('tb').innerHTML=d.mismatches.slice(0,500).map(m=>`<tr><td>${esc(m.Key)}</td><td>${esc(m.Column)}</td><td>${esc(m.Source_Value)}</td><td>${esc(m.Target_Value)}</td></tr>`).join('');
+    $('tw').classList.toggle('hide',!d.mismatches.length);$('exp').classList.remove('hide');
+  }catch(e){alert('Could not reach the server: '+e.message)}
+  finally{$('run').disabled=false;$('run').textContent='Run validation'}
+};
+$('exp').onclick=async()=>{
+  const r=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(last)});
+  const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='validation_report.xlsx';a.click();
+};
+</script></body></html>
